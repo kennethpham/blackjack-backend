@@ -6,8 +6,11 @@ use axum::{
     routing::get,
     Router,
 };
+use dotenv::dotenv;
+use mongodb::{options::ClientOptions, options::Credential, Client};
 use tokio::fs;
 use tokio_util::io::ReaderStream;
+
 mod card;
 
 async fn get_card(Path((value, suit)): Path<(String, String)>) -> impl IntoResponse {
@@ -18,10 +21,7 @@ async fn get_card(Path((value, suit)): Path<(String, String)>) -> impl IntoRespo
         Err(_) => return Err(StatusCode::BAD_REQUEST).into(),
     };
 
-    let file = match fs::File::open(&String::from(
-        format!("assets/cards/{}.svg", file_name)
-    ))
-    .await
+    let file = match fs::File::open(&String::from(format!("assets/cards/{}.svg", file_name))).await
     {
         Ok(file) => file,
         Err(_) => return Err(StatusCode::NOT_FOUND).into(),
@@ -37,7 +37,20 @@ async fn get_card(Path((value, suit)): Path<(String, String)>) -> impl IntoRespo
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    dotenv().ok();
+
+    let db_credentials = Credential::builder()
+        .username(dotenv::var("DB_USERNAME").unwrap())
+        .password(dotenv::var("DB_PASSWORD").unwrap())
+        .build();
+
+    let mut db_client_options = ClientOptions::parse(dotenv::var("DB_URI").unwrap()).await?;
+
+    db_client_options.credential = Some(db_credentials);
+
+    let client = Client::with_options(db_client_options)?;
+
     let app = Router::new()
         .route("/", get(|| async { "Hello, World!" }))
         .route("/card/:value/:suit", get(get_card));
@@ -45,4 +58,5 @@ async fn main() {
     // run our app with hyper, listening globally on port 3000
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
     axum::serve(listener, app).await.unwrap();
+    Ok(())
 }
