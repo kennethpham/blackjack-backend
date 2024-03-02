@@ -1,17 +1,27 @@
 use axum::{
     body::Body,
-    extract::Path,
+    extract::{Json, Path, State},
     http::{header, StatusCode},
     response::IntoResponse,
-    routing::get,
+    routing::{get, post},
     Router,
 };
 use dotenv::dotenv;
-use mongodb::{options::ClientOptions, options::Credential, Client};
+use mongodb::{bson::doc, options::ClientOptions, options::Credential, Client};
+use std::sync::Arc;
 use tokio::fs;
 use tokio_util::io::ReaderStream;
 
+use crate::db::user_data::{PostUserJson, UserData};
+
 mod card;
+mod db {
+    pub mod user_data;
+}
+
+struct DB {
+    client: Client,
+}
 
 async fn get_card(Path((value, suit)): Path<(String, String)>) -> impl IntoResponse {
     let card_result = card::get_card_file(value, suit);
@@ -36,6 +46,49 @@ async fn get_card(Path((value, suit)): Path<(String, String)>) -> impl IntoRespo
     Ok((headers, body))
 }
 
+async fn add_user(
+    State(db): State<Arc<DB>>,
+    Json(payload): Json<PostUserJson>,
+) -> impl IntoResponse {
+    let collection = db
+        .client
+        .database("blackjack")
+        .collection::<UserData>("user-data");
+    let user_name = payload.name;
+
+    match collection.find_one(doc! { "name": &user_name }, None).await {
+        Ok(_) => return (StatusCode::FOUND, "user already created").into_response(),
+        Err(e) => e,
+    };
+
+    let doc = UserData {
+        name: user_name,
+        wins: 0,
+    };
+
+    let result = match collection.insert_one(doc, None).await {
+        Ok(res) => res,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+
+    println!("{:?}", result);
+
+    StatusCode::OK.into_response()
+}
+
+async fn get_user(State(db): State<Arc<DB>>, Path(name): Path<String>) -> impl IntoResponse {
+    let collection = db
+        .client
+        .database("blackjack")
+        .collection::<UserData>("user-data");
+    let user = match collection.find_one(doc! { "name": name }, None).await {
+        Ok(user) => user,
+        Err(e) => return (StatusCode::NOT_FOUND, e.to_string()).into_response(),
+    };
+
+    (StatusCode::OK, Json(user)).into_response()
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     dotenv().ok();
@@ -51,9 +104,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let client = Client::with_options(db_client_options)?;
 
+    let shared_db_state = Arc::new(DB { client });
+
     let app = Router::new()
         .route("/", get(|| async { "Hello, World!" }))
-        .route("/card/:value/:suit", get(get_card));
+        .route("/card/:value/:suit", get(get_card))
+        .route("/user/create", post(add_user))
+        .route("/user/:name", get(get_user))
+        .with_state(shared_db_state);
 
     // run our app with hyper, listening globally on port 3000
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
