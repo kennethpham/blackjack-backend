@@ -16,3 +16,5 @@ tower = "0.4.13"
 anyhow = "1.0.79"
 tokio-util = "0.7.10"
 mongodb = "2.8.1"
+tower-http = { version = "0.5.2", features = ["cors"] }
+http = "1.0.0"

@@ -7,10 +7,12 @@ use axum::{
     Router,
 };
 use dotenv::dotenv;
+use http::Method;
 use mongodb::{bson::doc, options::ClientOptions, options::Credential, Client};
 use std::sync::Arc;
 use tokio::fs;
 use tokio_util::io::ReaderStream;
+use tower_http::cors::{Any, CorsLayer};
 
 use crate::db::user_data::{PostUserJson, UserData};
 
@@ -86,7 +88,10 @@ async fn get_user(State(db): State<Arc<DB>>, Path(name): Path<String>) -> impl I
         Err(e) => return (StatusCode::NOT_FOUND, e.to_string()).into_response(),
     };
 
-    (StatusCode::OK, Json(user)).into_response()
+    match user {
+        Some(user) => (StatusCode::OK, Json(user)).into_response(),
+        None => (StatusCode::NOT_FOUND, "user not found".to_string()).into_response(),
+    }
 }
 
 #[tokio::main]
@@ -106,12 +111,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let shared_db_state = Arc::new(DB { client });
 
+    let cors = CorsLayer::new()
+        // allow `GET` and `POST` when accessing the resource
+        .allow_methods(vec![Method::GET, Method::POST])
+        // allow requests from any origin
+        .allow_origin(Any);
+
     let app = Router::new()
         .route("/", get(|| async { "Hello, World!" }))
         .route("/card/:value/:suit", get(get_card))
         .route("/user/create", post(add_user))
         .route("/user/:name", get(get_user))
-        .with_state(shared_db_state);
+        .with_state(shared_db_state)
+        .layer(cors);
 
     // run our app with hyper, listening globally on port 3000
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
