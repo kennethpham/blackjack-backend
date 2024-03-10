@@ -8,7 +8,12 @@ use axum::{
 };
 use dotenv::dotenv;
 use http::Method;
-use mongodb::{bson::doc, options::ClientOptions, options::Credential, Client};
+use mongodb::{
+    bson::{doc, uuid::Uuid},
+    options::ClientOptions,
+    options::Credential,
+    Client,
+};
 use std::sync::Arc;
 use tokio::fs;
 use tokio_util::io::ReaderStream;
@@ -59,11 +64,13 @@ async fn add_user(
     let user_name = payload.name;
 
     match collection.find_one(doc! { "name": &user_name }, None).await {
-        Ok(_) => return (StatusCode::FOUND, "user already created").into_response(),
-        Err(e) => e,
+        Ok(Some(_)) => return (StatusCode::FOUND, "user already created").into_response(),
+        Ok(None) => (),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };
 
     let doc = UserData {
+        _id: Uuid::new(),
         name: user_name,
         wins: 0,
     };

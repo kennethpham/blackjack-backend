@@ -1,7 +1,9 @@
+use mongodb::bson::uuid::Uuid;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UserData {
+    pub _id: Uuid,
     pub name: String,
     pub wins: u64,
 }
