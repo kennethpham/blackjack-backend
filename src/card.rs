@@ -1,7 +1,7 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use strum_macros::Display;
 
-#[derive(Display, Serialize)]
+#[derive(Debug, Deserialize, Display, Serialize)]
 pub enum CardValue {
     Ace,
     Two,
@@ -17,7 +17,7 @@ pub enum CardValue {
     Queen,
     King,
 }
-#[derive(Display, Serialize)]
+#[derive(Debug, Deserialize, Display, Serialize)]
 pub enum CardSuit {
     Clubs,
     Diamonds,
@@ -25,7 +25,7 @@ pub enum CardSuit {
     Spades,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Card {
     value: CardValue,
     suit: CardSuit,
