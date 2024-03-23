@@ -1,3 +1,11 @@
+mod blackjack {
+    pub mod game;
+}
+mod card;
+mod db {
+    pub mod user_data;
+}
+
 use axum::{
     body::Body,
     extract::{Json, Path, State},
@@ -6,6 +14,7 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use blackjack::game::Blackjack;
 use dotenv::dotenv;
 use http::Method;
 use mongodb::{
@@ -20,11 +29,6 @@ use tokio_util::io::ReaderStream;
 use tower_http::cors::{Any, CorsLayer};
 
 use crate::db::user_data::{PostUserJson, UserData};
-
-mod card;
-mod db {
-    pub mod user_data;
-}
 
 struct DB {
     client: Client,
@@ -117,6 +121,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let client = Client::with_options(db_client_options)?;
 
     let shared_db_state = Arc::new(DB { client });
+
+    let _game = Blackjack::create_game();
 
     let cors = CorsLayer::new()
         // allow `GET` and `POST` when accessing the resource
