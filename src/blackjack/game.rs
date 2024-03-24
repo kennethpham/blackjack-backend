@@ -1,8 +1,15 @@
 use mongodb::bson::uuid::Uuid;
+use strum::IntoEnumIterator;
+
+use crate::card::{Card, CardSuit, CardValue};
+
+use rand::{seq::SliceRandom, thread_rng};
+
+// Number of decks used by table.
+const NUM_OF_DECKS: u8 = 3;
 
 struct PlayerCard {
-    suit: String,
-    value: String,
+    pub card: Card,
     visible: bool,
 }
 
@@ -14,6 +21,7 @@ struct Player {
 struct Table {
     id: Uuid,
     players: Vec<Player>,
+    deck: Vec<PlayerCard>,
 }
 
 pub struct Blackjack {
@@ -42,18 +50,31 @@ impl Blackjack {
         self.tables.push(Table {
             id: Uuid::new(),
             players: Vec::new(),
+            deck: Blackjack::create_deck(),
         });
         self.tables.last().unwrap().id
+    }
+
+    pub fn create_deck() -> Vec<PlayerCard> {
+        let mut deck: Vec<PlayerCard> = Vec::new();
+        for suit in CardSuit::iter() {
+            for value in CardValue::iter() {
+                let card = Card { suit, value };
+                for _num in 1..=NUM_OF_DECKS {
+                    deck.push(PlayerCard {
+                        card,
+                        visible: false,
+                    });
+                }
+            }
+        }
+        let mut rng = thread_rng();
+        deck.as_mut_slice().shuffle(&mut rng);
+        deck
     }
 }
 
 impl Table {
-    pub fn create_table() -> Table {
-        let id = Uuid::new();
-        let players: Vec<Player> = Vec::new();
-        Table { id, players }
-    }
-
     pub fn add_player(&mut self, id: Uuid) {
         let player = Player {
             id,
@@ -76,6 +97,8 @@ impl Table {
             None => false,
         }
     }
+
+    // TODO: pub fn check_winners(self) -> Vec<Player> {}
 }
 
 impl Player {
@@ -86,5 +109,4 @@ impl Player {
     pub fn add_card(&mut self) {
         // TODO: ADD CARD LOGIC
     }
-
 }

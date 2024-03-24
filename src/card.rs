@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
-use strum_macros::Display;
+use strum_macros::{Display, EnumIter};
 
-#[derive(Debug, Deserialize, Display, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Display, EnumIter, Serialize)]
 pub enum CardValue {
     Ace,
     Two,
@@ -17,7 +17,7 @@ pub enum CardValue {
     Queen,
     King,
 }
-#[derive(Debug, Deserialize, Display, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Display, EnumIter, Serialize)]
 pub enum CardSuit {
     Clubs,
     Diamonds,
@@ -25,10 +25,10 @@ pub enum CardSuit {
     Spades,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub struct Card {
-    value: CardValue,
-    suit: CardSuit,
+    pub value: CardValue,
+    pub suit: CardSuit,
 }
 
 pub fn get_card_file(value: String, suit: String) -> Result<String, &'static str> {
