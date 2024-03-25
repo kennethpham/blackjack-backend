@@ -21,7 +21,7 @@ struct Player {
 struct Table {
     id: Uuid,
     players: Vec<Player>,
-    deck: Vec<PlayerCard>,
+    deck: Vec<Card>,
 }
 
 pub struct Blackjack {
@@ -55,16 +55,13 @@ impl Blackjack {
         self.tables.last().unwrap().id
     }
 
-    pub fn create_deck() -> Vec<PlayerCard> {
-        let mut deck: Vec<PlayerCard> = Vec::new();
+    pub fn create_deck() -> Vec<Card> {
+        let mut deck: Vec<Card> = Vec::new();
         for suit in CardSuit::iter() {
             for value in CardValue::iter() {
                 let card = Card { suit, value };
                 for _num in 1..=NUM_OF_DECKS {
-                    deck.push(PlayerCard {
-                        card,
-                        visible: false,
-                    });
+                    deck.push(card);
                 }
             }
         }
