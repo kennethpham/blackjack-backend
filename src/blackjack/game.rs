@@ -10,7 +10,7 @@ const NUM_OF_DECKS: u8 = 3;
 
 struct PlayerCard {
     pub card: Card,
-    visible: bool,
+    pub visible: bool,
 }
 
 struct Player {
@@ -22,6 +22,7 @@ struct Table {
     id: Uuid,
     players: Vec<Player>,
     deck: Vec<Card>,
+    dealer: Vec<PlayerCard>,
 }
 
 pub struct Blackjack {
@@ -51,6 +52,7 @@ impl Blackjack {
             id: Uuid::new(),
             players: Vec::new(),
             deck: Blackjack::create_deck(),
+            dealer: Vec::new(),
         });
         self.tables.last().unwrap().id
     }
@@ -80,7 +82,7 @@ impl Table {
         self.players.push(player);
     }
 
-    pub fn get_player(&mut self, id: Uuid) -> Option<usize> {
+    pub fn get_player(&self, id: Uuid) -> Option<usize> {
         self.players.iter().position(|x: &Player| x.id == id)
     }
 
@@ -95,15 +97,91 @@ impl Table {
         }
     }
 
-    // TODO: pub fn check_winners(self) -> Vec<Player> {}
-}
-
-impl Player {
-    pub fn get_cards(&self) -> &Vec<PlayerCard> {
-        self.hand.as_ref()
+    pub fn add_card(&mut self, id: Uuid) -> bool {
+        let index = self.get_player(id);
+        match index {
+            Some(num) => {
+                self.players[num].hand.push(PlayerCard {
+                    card: self.deck.pop().unwrap(),
+                    visible: true,
+                });
+                true
+            }
+            None => false,
+        }
     }
 
-    pub fn add_card(&mut self) {
-        // TODO: ADD CARD LOGIC
+    pub fn add_card_dealer(&mut self) {
+        self.dealer.push(PlayerCard {
+            card: self.deck.pop().unwrap(),
+            visible: false,
+        });
+    }
+
+    pub fn check_winner(&self, id: Uuid) -> bool {
+        let index = self.get_player(id);
+        match index {
+            Some(num) => {
+                // ( total with ace = 1, ( if ace present , total with one ace = 11) )
+                let mut player_total = (0, (false, 0));
+                for player_card in self.players[num].hand.iter() {
+                    let PlayerCard {
+                        card,
+                        visible: _visible,
+                    } = player_card;
+                    player_total.0 += card.value as i32 + 1;
+                    match card.value as i32 {
+                        0 => {
+                            if !player_total.1 .0 {
+                                player_total.1 .1 += card.value as i32 + 11;
+                                player_total.1 .0 = true;
+                            } else {
+                                player_total.1 .1 += card.value as i32 + 1;
+                            }
+                        }
+                        _ => player_total.1 .1 += card.value as i32 + 1,
+                    }
+                }
+                // ( total with ace = 1, ( if ace present , total with one ace = 11) )
+                let mut dealer_total = (0, (false, 0));
+                for player_card in self.dealer.as_slice() {
+                    let PlayerCard {
+                        card,
+                        visible: _visible,
+                    } = player_card;
+                    dealer_total.0 += card.value as i32 + 1;
+                    match card.value as i32 {
+                        0 => {
+                            if !dealer_total.1 .0 {
+                                dealer_total.1 .1 += card.value as i32 + 11;
+                                dealer_total.1 .0 = true;
+                            } else {
+                                dealer_total.1 .1 += card.value as i32 + 1;
+                            }
+                        }
+                        _ => dealer_total.1 .1 += card.value as i32 + 1,
+                    }
+                }
+                if (dealer_total.0 > player_total.0 || dealer_total.0 > player_total.1 .1)
+                    || (dealer_total.1 .1 > player_total.0 || dealer_total.1 .1 > player_total.1 .1)
+                        && dealer_total.0 <= 21
+                {
+                    true
+                } else {
+                    false
+                }
+            }
+            None => false,
+        }
+    }
+
+    pub fn check_winners_player(&self) -> Vec<Uuid> {
+        let mut winners: Vec<Uuid> = Vec::new();
+        for player in self.players.iter() {
+            if self.check_winner(player.id) {
+                winners.push(player.id);
+            }
+        }
+        winners
     }
 }
