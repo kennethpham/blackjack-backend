@@ -8,14 +8,18 @@ mod db {
 
 use axum::{
     body::Body,
-    extract::{Json, Path, State},
+    extract::ws::{Message, WebSocket, WebSocketUpgrade},
+    extract::{ConnectInfo, Json, Path, State},
     http::{header, StatusCode},
     response::IntoResponse,
     routing::{get, post},
-    Router,
+    Router, ServiceExt,
 };
+use axum_extra::{headers::UserAgent, TypedHeader};
 use blackjack::game::Blackjack;
+use db::user_data;
 use dotenv::dotenv;
+use futures_util::{SinkExt, StreamExt};
 use http::Method;
 use mongodb::{
     bson::{doc, uuid::Uuid},
@@ -23,10 +27,17 @@ use mongodb::{
     options::Credential,
     Client,
 };
-use std::sync::Arc;
+use std::{sync::Arc, ops::ControlFlow};
+use std::{net::SocketAddr, path::PathBuf};
 use tokio::fs;
 use tokio_util::io::ReaderStream;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::{
+    cors::{Any, CorsLayer},
+    services::ServeDir,
+    trace::{DefaultMakeSpan, TraceLayer},
+};
+
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::db::user_data::{PostUserJson, UserData};
 
@@ -122,24 +133,123 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let shared_db_state = Arc::new(DB { client });
 
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "blackjack-backend=debug,tower_http=debug".into()),
+        )
+        .with(tracing_subscriber::fmt::layer())
+        .init();
+
     let _game = Blackjack::create_game();
 
     let cors = CorsLayer::new()
         // allow `GET` and `POST` when accessing the resource
-        .allow_methods(vec![Method::GET, Method::POST])
+        .allow_methods(vec![Method::GET, Method::POST, Method::CONNECT])
         // allow requests from any origin
         .allow_origin(Any);
 
     let app = Router::new()
-        .route("/", get(|| async { "Hello, World!" }))
+        // .route("/", get(|| async { "Hello, World!" }))
         .route("/card/:value/:suit", get(get_card))
-        .route("/user/create", post(add_user))
+        // .route("/user/create", post(add_user))
         .route("/user/:name", get(get_user))
+        .route("/ws", get(ws_handler))
         .with_state(shared_db_state)
-        .layer(cors);
+        .layer(cors)
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(DefaultMakeSpan::default().include_headers(true)),
+        );
 
     // run our app with hyper, listening globally on port 3000
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
+        .await
+        .unwrap();
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .unwrap();
     Ok(())
+}
+
+async fn ws_handler(
+    ws: WebSocketUpgrade,
+    user_agent: Option<TypedHeader<headers::UserAgent>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+) -> impl IntoResponse {
+    let user_agent = match user_agent {
+        Some(user_data) => user_data.to_string(),
+        None => String::from("Unknown browser"),
+    };
+    println!("{} at {}", user_agent, addr);
+
+    ws.on_failed_upgrade(|error| {
+        println!("Error: {}", error);
+    })
+    .on_upgrade(move |socket| handle_socket(socket, addr))
+}
+
+async fn handle_socket(mut socket: WebSocket, who: SocketAddr) {
+    let (mut sender, mut receiver) = socket.split();
+
+    let mut send_task = tokio::spawn(async move {
+        if sender
+            .send(Message::Text("Hello from server".to_string()))
+            .await
+            .is_err()
+        {
+            return 1;
+        }
+        0
+    });
+
+    let mut recv_task = tokio::spawn(async move {
+        let mut cnt = 0;
+        while let Some(Ok(msg)) = receiver.next().await {
+            cnt += 1;
+            // print message and break if instructed to do so
+            if process_message(msg, who).is_break() {
+                break;
+            }
+        }
+        cnt
+    });
+    println!("Websocket context {who} completed handle_socket");
+}
+
+/// helper to print contents of messages to stdout. Has special treatment for Close.
+fn process_message(msg: Message, who: SocketAddr) -> ControlFlow<(), ()> {
+    match msg {
+        Message::Text(t) => {
+            println!(">>> {who} sent str: {t:?}");
+        }
+        Message::Binary(d) => {
+            println!(">>> {} sent {} bytes: {:?}", who, d.len(), d);
+        }
+        Message::Close(c) => {
+            if let Some(cf) = c {
+                println!(
+                    ">>> {} sent close with code {} and reason `{}`",
+                    who, cf.code, cf.reason
+                );
+            } else {
+                println!(">>> {who} somehow sent close message without CloseFrame");
+            }
+            return ControlFlow::Break(());
+        }
+
+        Message::Pong(v) => {
+            println!(">>> {who} sent pong with {v:?}");
+        }
+        // You should never need to manually handle Message::Ping, as axum's websocket library
+        // will do so for you automagically by replying with Pong and copying the v according to
+        // spec. But if you need the contents of the pings you can see them here.
+        Message::Ping(v) => {
+            println!(">>> {who} sent ping with {v:?}");
+        }
+    }
+    ControlFlow::Continue(())
 }
