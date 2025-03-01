@@ -28,8 +28,8 @@ use mongodb::{
     options::Credential,
     Client,
 };
-use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
+use std::{net::SocketAddr, ops::ControlFlow};
 use tokio::fs;
 use tokio_util::io::ReaderStream;
 use tower_http::{
@@ -173,12 +173,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     let id = Uuid::new();
                     websocket_manager.add_ws(id.clone(), ws_send);
                     let _ = resp.send(id);
+                    websocket_manager.update_all_list().await;
                 }
                 DeleteWS { id } => {
-                    websocket_manager.remove_ws(id);
+                    websocket_manager.remove_ws(id.clone());
+                    websocket_manager.update_all_list().await;
                 }
                 SendWS { id, msg } => {
                     websocket_manager.send_msg(id, msg).await;
+                }
+                UpdateUserList {} => {
+                    websocket_manager.update_all_list().await;
                 }
             }
         }
@@ -241,14 +246,10 @@ async fn ws_handler(
 
 async fn handle_socket(
     State(app_state): State<Arc<Mutex<AppState>>>,
-    mut socket: WebSocket,
+    socket: WebSocket,
     who: SocketAddr,
 ) {
-    let (mut sink, mut stream) = socket.split();
-
-    let _ = sink
-        .send(Message::Text("TEST from server".to_string()))
-        .await;
+    let (sink, mut stream) = socket.split();
 
     let wm_send_copy = app_state.lock().unwrap().wm_send.clone();
 
@@ -265,14 +266,19 @@ async fn handle_socket(
     })
     .await;
 
+    let id = res.unwrap().unwrap();
+
+    let id_clone = id.clone();
+
     let wm_send_copy2 = app_state.lock().unwrap().wm_send.clone();
 
     let _ = tokio::spawn(async move {
-        let uuid = res.unwrap().unwrap();
+        let uuid = id;
 
         let send_ws = websocket_manager::SendWS {
-            msg_type: "uuid".to_string(),
-            msg_data: uuid.clone().to_string(),
+            msg_type: websocket_manager::MsgType::SelfUuid,
+            msg_data_str: Some(uuid.clone().to_string()),
+            msg_data_arr: None,
         };
 
         let cmd = websocket_manager::Command::SendWS {
@@ -281,8 +287,67 @@ async fn handle_socket(
         };
 
         let _ = wm_send_copy2.send(cmd).await;
+
+        let _ = wm_send_copy2
+            .send(websocket_manager::Command::UpdateUserList {})
+            .await;
     })
     .await;
 
+    let wm_send_copy3 = app_state.lock().unwrap().wm_send.clone();
+
+    let _ = tokio::spawn(async move {
+        let wm_send = wm_send_copy3;
+        let uuid = id_clone;
+        while let Some(Ok(msg)) = stream.next().await {
+            if process_message(msg, who, uuid.clone(), &wm_send)
+                .await
+                .is_break()
+            {
+                break;
+            }
+        }
+    });
+
     println!("Websocket context {who} completed handle_socket");
+}
+
+async fn process_message(
+    msg: Message,
+    who: SocketAddr,
+    id: Uuid,
+    recv: &tokio::sync::mpsc::Sender<websocket_manager::Command>,
+) -> ControlFlow<(), ()> {
+    match msg {
+        Message::Text(t) => {
+            println!(">>> {who} sent str: {t:?}");
+        }
+        Message::Binary(d) => {
+            println!(">>> {} sent {} bytes: {:?}", who, d.len(), d);
+        }
+        Message::Close(c) => {
+            if let Some(cf) = c {
+                println!(
+                    ">>> {} sent close with code {} and reason `{}`",
+                    who, cf.code, cf.reason
+                );
+            } else {
+                println!(">>> {who} somehow sent close message without CloseFrame");
+            }
+            let cmd = websocket_manager::Command::DeleteWS { id };
+            let _ = recv.send(cmd).await;
+            return ControlFlow::Break(());
+        }
+
+        Message::Pong(v) => {
+            println!(">>> {who} sent pong with {v:?}");
+        }
+        // You should never need to manually handle Message::Ping, as axum's websocket library
+        // will do so for you automagically by replying with Pong and copying the v according to
+        // spec. But if you need the contents of the pings you can see them here.
+        Message::Ping(v) => {
+            println!(">>> {who} sent ping with {v:?}");
+        }
+    }
+    ControlFlow::Continue(())
 }
