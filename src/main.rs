@@ -20,8 +20,8 @@ use axum_extra::TypedHeader;
 use blackjack::game::Blackjack;
 use db::user_data;
 use dotenv::dotenv;
-use futures_util::{SinkExt, StreamExt};
-use http::Method;
+use futures_util::StreamExt;
+use http::{header::CONTENT_TYPE, Method};
 use mongodb::{
     bson::{doc, uuid::Uuid},
     options::ClientOptions,
@@ -88,7 +88,7 @@ async fn add_user(
     let user_name = payload.name;
 
     match collection.find_one(doc! { "name": &user_name }, None).await {
-        Ok(Some(_)) => return (StatusCode::FOUND, "user already created").into_response(),
+        Ok(Some(_)) => return (StatusCode::CONFLICT, "user already created").into_response(),
         Ok(None) => (),
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };
@@ -99,14 +99,14 @@ async fn add_user(
         wins: 0,
     };
 
-    let result = match collection.insert_one(doc, None).await {
+    let result = match collection.insert_one(doc.clone(), None).await {
         Ok(res) => res,
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };
 
-    println!("{:?}", result);
+    println!("Added: {:?}", result);
 
-    StatusCode::OK.into_response()
+    (StatusCode::OK, Json(doc)).into_response()
 }
 
 async fn get_user(
@@ -198,12 +198,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // allow `GET` and `POST` when accessing the resource
         .allow_methods(vec![Method::GET, Method::POST, Method::CONNECT])
         // allow requests from any origin
-        .allow_origin(Any);
+        .allow_origin(Any)
+        // allow any headers
+        .allow_headers([CONTENT_TYPE]);
 
     let app = Router::new()
         // .route("/", get(|| async { "Hello, World!" }))
         .route("/card/:value/:suit", get(get_card))
-        // .route("/user/create", post(add_user))
+        .route("/user/create", post(add_user))
         .route("/user/:name", get(get_user))
         .route("/ws", get(ws_handler))
         .with_state(shared_db_state)
