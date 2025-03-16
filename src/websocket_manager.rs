@@ -2,14 +2,25 @@ use std::{collections::HashMap, net::SocketAddr, ops::ControlFlow};
 
 use axum::extract::ws::{Message, WebSocket};
 use futures_util::{stream::SplitSink, SinkExt};
-use mongodb::bson::Uuid;
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
+use uuid::Uuid;
+
+use crate::{AppState, DB};
+
+#[derive(Debug, Deserialize, Serialize)]
+pub enum MsgType {
+    UserAdded,
+    Data,
+    SelfUuid,
+    UpdateUserList,
+}
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct SendWS {
-    pub msg_type: String,
-    pub msg_data: String,
+    pub msg_type: MsgType,
+    pub msg_data_str: Option<String>,
+    pub msg_data_arr: Option<Vec<String>>,
 }
 
 #[derive(Debug)]
@@ -25,6 +36,7 @@ pub enum Command {
         id: Uuid,
         msg: SendWS,
     },
+    UpdateUserList { },
 }
 
 pub struct WebSocketManager {
@@ -45,19 +57,14 @@ impl WebSocketManager {
         }
     }
 
-    pub async fn update_all(&mut self, id: Option<Uuid>) {
-        for (key, val) in &mut self.ws_map {
-            match id {
-                Some(id) => {
-                    if key.eq(&id) {
-                        continue;
-                    }
-                }
-                None => (),
-            }
+    pub async fn update_all_list(&mut self) {
+        let uuid_vec = self.get_all_uuids();
+        for (_, val) in &mut self.ws_map {
             let msg = SendWS {
-                msg_type: "new ws added".to_string(),
-                msg_data: id.unwrap().clone().to_string(),
+                msg_type: MsgType::UpdateUserList,
+                msg_data_str: None,
+                msg_data_arr: Some(Vec::from_iter(uuid_vec.iter().map(|x| x.to_string()))),
+
             };
             let _ = val
                 .send(Message::Text(serde_json::ser::to_string(&msg).unwrap()))
@@ -67,6 +74,10 @@ impl WebSocketManager {
 
     pub fn get_ws(&self, id: Uuid) -> Option<&SplitSink<WebSocket, Message>> {
         self.ws_map.get(&id)
+    }
+
+    pub fn get_all_uuids(&self) -> Vec<Uuid> {
+        Vec::from_iter(self.ws_map.keys().map(|x| x.clone()))
     }
 
     pub async fn send_msg(&mut self, id: Uuid, msg: SendWS) {

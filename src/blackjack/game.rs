@@ -1,5 +1,5 @@
-use mongodb::bson::uuid::Uuid;
 use strum::IntoEnumIterator;
+use uuid::Uuid;
 
 use crate::card::{Card, CardSuit, CardValue};
 
@@ -49,7 +49,7 @@ impl Blackjack {
     }
     pub fn add_table(&mut self) -> Uuid {
         self.tables.push(Table {
-            id: Uuid::new(),
+            id: Uuid::new_v4(),
             players: Vec::new(),
             deck: Blackjack::create_deck(),
             dealer: Vec::new(),
