@@ -1,11 +1,13 @@
-use mongodb::bson::uuid::Uuid;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct UserData {
+pub struct User {
     pub _id: Uuid,
     pub name: String,
-    pub wins: u64,
+    pub created_at: DateTime<Utc>,
+    pub wins: i32,
 }
 
 #[derive(Deserialize)]

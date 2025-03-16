@@ -2,9 +2,9 @@ use std::{collections::HashMap, net::SocketAddr, ops::ControlFlow};
 
 use axum::extract::ws::{Message, WebSocket};
 use futures_util::{stream::SplitSink, SinkExt};
-use mongodb::bson::Uuid;
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
+use uuid::Uuid;
 
 use crate::{AppState, DB};
 
