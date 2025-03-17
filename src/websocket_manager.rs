@@ -2,11 +2,10 @@ use std::{collections::HashMap, net::SocketAddr, ops::ControlFlow};
 
 use axum::extract::ws::{Message, WebSocket};
 use futures_util::{stream::SplitSink, SinkExt};
+use http::StatusCode;
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 use uuid::Uuid;
-
-use crate::{AppState, DB};
 
 #[derive(Debug, Deserialize, Serialize)]
 pub enum MsgType {
@@ -20,7 +19,8 @@ pub enum MsgType {
 pub struct SendWS {
     pub msg_type: MsgType,
     pub msg_data_str: Option<String>,
-    pub msg_data_arr: Option<Vec<String>>,
+    pub msg_data_keys: Option<Vec<(String, Uuid)>>,
+    pub msg_data_arr: Option<String>,
 }
 
 #[derive(Debug)]
@@ -28,19 +28,20 @@ pub enum Command {
     AddWS {
         ws_send: SplitSink<WebSocket, Message>,
         resp: oneshot::Sender<Uuid>,
+        key: (String, Uuid),
     },
     DeleteWS {
-        id: Uuid,
+        key: (String, Uuid),
     },
     SendWS {
-        id: Uuid,
+        key: (String, Uuid),
         msg: SendWS,
     },
-    UpdateUserList { },
+    UpdateUserList {},
 }
 
 pub struct WebSocketManager {
-    ws_map: HashMap<Uuid, SplitSink<WebSocket, Message>>,
+    ws_map: HashMap<(String, Uuid), SplitSink<WebSocket, Message>>,
 }
 
 impl WebSocketManager {
@@ -50,10 +51,23 @@ impl WebSocketManager {
         }
     }
 
-    pub fn add_ws(&mut self, id: Uuid, sender: SplitSink<WebSocket, Message>) {
-        match self.ws_map.insert(id.clone(), sender) {
-            None => println!("add new {:?}", self.ws_map[&id.clone()]),
-            Some(old) => println!("replaced old: {:?} with new: {:?}", old, self.ws_map[&id]),
+    pub fn add_ws(
+        &mut self,
+        key: (String, Uuid),
+        sender: SplitSink<WebSocket, Message>,
+    ) -> (StatusCode, String) {
+        match self.ws_map.insert(key.clone(), sender) {
+            None => {
+                println!("add new {:?}", self.ws_map[&key]);
+                (StatusCode::OK, "ws was added".to_string())
+            }
+            Some(old) => {
+                println!("replaced old: {:?} with new: {:?}", old, self.ws_map[&key]);
+                (
+                    StatusCode::CONFLICT,
+                    "ws was not added due to conflicting keys".to_string(),
+                )
+            }
         }
     }
 
@@ -63,8 +77,8 @@ impl WebSocketManager {
             let msg = SendWS {
                 msg_type: MsgType::UpdateUserList,
                 msg_data_str: None,
-                msg_data_arr: Some(Vec::from_iter(uuid_vec.iter().map(|x| x.to_string()))),
-
+                msg_data_keys: Some(Vec::from_iter(uuid_vec.iter().map(|t| t.clone()))),
+                msg_data_arr: None,
             };
             let _ = val
                 .send(Message::Text(serde_json::ser::to_string(&msg).unwrap()))
@@ -72,22 +86,22 @@ impl WebSocketManager {
         }
     }
 
-    pub fn get_ws(&self, id: Uuid) -> Option<&SplitSink<WebSocket, Message>> {
-        self.ws_map.get(&id)
+    pub fn get_ws(&self, id: Uuid, name: String) -> Option<&SplitSink<WebSocket, Message>> {
+        self.ws_map.get(&(name, id))
     }
 
-    pub fn get_all_uuids(&self) -> Vec<Uuid> {
+    pub fn get_all_uuids(&self) -> Vec<(String, Uuid)> {
         Vec::from_iter(self.ws_map.keys().map(|x| x.clone()))
     }
 
-    pub async fn send_msg(&mut self, id: Uuid, msg: SendWS) {
-        let ws_send = self.ws_map.get_mut(&id).unwrap();
+    pub async fn send_msg(&mut self, key: (String, Uuid), msg: SendWS) {
+        let ws_send = self.ws_map.get_mut(&key).unwrap();
         let _ = ws_send
             .send(Message::Text(serde_json::ser::to_string(&msg).unwrap()))
             .await;
     }
 
-    pub fn remove_ws(&mut self, id: Uuid) -> Option<SplitSink<WebSocket, Message>> {
-        self.ws_map.remove(&id)
+    pub fn remove_ws(&mut self, key: (String, Uuid)) -> Option<SplitSink<WebSocket, Message>> {
+        self.ws_map.remove(&key)
     }
 }
