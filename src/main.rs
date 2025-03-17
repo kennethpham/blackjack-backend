@@ -13,10 +13,10 @@ use axum::{
     debug_handler,
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        ConnectInfo, FromRef, FromRequestParts, Json, Path, State,
+        ConnectInfo, Json, Path, State,
     },
     http::{header, StatusCode},
-    response::IntoResponse,
+    response::{IntoResponse, Response},
     routing::{get, post},
     Router,
 };
@@ -39,7 +39,7 @@ use tower_http::{
 use uuid::Uuid;
 use websocket_manager::WebSocketManager;
 
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::db::user_data::{PostUserJson, User};
 
@@ -200,7 +200,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let _game = Blackjack::create_game();
 
     // Create async task and access WebSocketManager with channels
-    let (mut wm_send, mut wm_read) = tokio::sync::mpsc::channel::<websocket_manager::Command>(10);
+    let (wm_send, mut wm_read) = tokio::sync::mpsc::channel::<websocket_manager::Command>(10);
 
     let _ = wm_send.clone();
 
@@ -212,18 +212,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             use websocket_manager::Command::*;
 
             match cmd {
-                AddWS { ws_send, resp } => {
-                    let id = Uuid::new_v4();
-                    websocket_manager.add_ws(id.clone(), ws_send);
-                    let _ = resp.send(id);
+                AddWS { ws_send, resp, key } => {
+                    websocket_manager.add_ws(key.clone(), ws_send);
+                    let _ = resp.send(key.1);
                     websocket_manager.update_all_list().await;
                 }
-                DeleteWS { id } => {
-                    websocket_manager.remove_ws(id.clone());
+                DeleteWS { key } => {
+                    websocket_manager.remove_ws(key);
                     websocket_manager.update_all_list().await;
                 }
-                SendWS { id, msg } => {
-                    websocket_manager.send_msg(id, msg).await;
+                SendWS { key, msg } => {
+                    websocket_manager.send_msg(key, msg).await;
                 }
                 UpdateUserList {} => {
                     websocket_manager.update_all_list().await;
@@ -250,7 +249,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .route("/card/:value/:suit", get(get_card))
         .route("/user/create", post(add_user))
         .route("/user/:name", get(get_user))
-        .route("/ws", get(ws_handler))
+        .route("/ws/:id", get(ws_handler))
         .with_state(shared_db_state)
         .layer(cors)
         .layer(
@@ -273,30 +272,61 @@ async fn ws_handler(
     State(app_state): State<Arc<AppState>>,
     ws: WebSocketUpgrade,
     user_agent: Option<TypedHeader<headers::UserAgent>>,
+    Path(id): Path<String>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
-) -> impl IntoResponse {
+) -> Result<Response, (StatusCode, String)> {
     let user_agent = match user_agent {
         Some(user_data) => user_data.to_string(),
         None => String::from("Unknown browser"),
     };
     println!("{} at {}", user_agent, addr);
 
-    ws.on_failed_upgrade(|error| {
-        println!("Error: {}", error);
-    })
-    .on_upgrade(move |socket| handle_socket(State(app_state), socket, addr))
+    let arc = &app_state.clone();
+
+    let conn = arc
+        .as_ref()
+        .db
+        .db_pool
+        .get()
+        .await
+        .map_err(internal_error)?;
+
+    let uuid = Uuid::parse_str(id.as_str()).map_err(internal_error)?;
+
+    // Verify that id passed is valid
+    let row = conn
+        .query_one(
+            "SELECT username, id FROM users WHERE id = $1 ",
+            &[&uuid.clone()],
+        )
+        .await
+        .map_err(internal_error)?;
+
+    Ok(ws
+        .on_failed_upgrade(|error| {
+            println!("Error: {}", error);
+        })
+        .on_upgrade(move |socket| handle_socket(app_state, socket, addr, (row.get(0), row.get(1)))))
 }
 
-async fn handle_socket(State(app_state): State<Arc<AppState>>, socket: WebSocket, who: SocketAddr) {
+async fn handle_socket(
+    app_state: Arc<AppState>,
+    socket: WebSocket,
+    who: SocketAddr,
+    key: (String, Uuid),
+) {
     let (sink, mut stream) = socket.split();
 
-    let wm_send_copy = app_state.as_ref().wm_send.clone();
+    let wm_send_copy = app_state.wm_send.clone();
 
-    let res = tokio::spawn(async move {
+    let mut key_clone = key.clone();
+
+    let _ = tokio::spawn(async move {
         let (resp_send, resp_recv) = tokio::sync::oneshot::channel();
         let cmd = websocket_manager::Command::AddWS {
             ws_send: sink,
             resp: resp_send,
+            key: key_clone,
         };
 
         let _ = wm_send_copy.send(cmd).await;
@@ -305,25 +335,21 @@ async fn handle_socket(State(app_state): State<Arc<AppState>>, socket: WebSocket
     })
     .await;
 
-    let id = res.unwrap().unwrap();
+    key_clone = key.clone();
 
-    let id_clone = id.clone();
-
-    let wm_send_copy2 = app_state.as_ref().wm_send.clone();
+    let wm_send_copy2 = app_state.wm_send.clone();
 
     let _ = tokio::spawn(async move {
-        let uuid = id;
+        let key = key_clone;
 
         let send_ws = websocket_manager::SendWS {
             msg_type: websocket_manager::MsgType::SelfUuid,
-            msg_data_str: Some(uuid.clone().to_string()),
+            msg_data_str: Some(key.1.to_string()),
             msg_data_arr: None,
+            msg_data_keys: None,
         };
 
-        let cmd = websocket_manager::Command::SendWS {
-            id: uuid.clone(),
-            msg: send_ws,
-        };
+        let cmd = websocket_manager::Command::SendWS { key, msg: send_ws };
 
         let _ = wm_send_copy2.send(cmd).await;
 
@@ -333,13 +359,12 @@ async fn handle_socket(State(app_state): State<Arc<AppState>>, socket: WebSocket
     })
     .await;
 
-    let wm_send_copy3 = app_state.as_ref().wm_send.clone();
+    let wm_send_copy3 = app_state.wm_send.clone();
 
     let _ = tokio::spawn(async move {
         let wm_send = wm_send_copy3;
-        let uuid = id_clone;
         while let Some(Ok(msg)) = stream.next().await {
-            if process_message(msg, who, uuid.clone(), &wm_send)
+            if process_message(msg, who, key.clone(), &wm_send)
                 .await
                 .is_break()
             {
@@ -354,7 +379,7 @@ async fn handle_socket(State(app_state): State<Arc<AppState>>, socket: WebSocket
 async fn process_message(
     msg: Message,
     who: SocketAddr,
-    id: Uuid,
+    key: (String, Uuid),
     recv: &tokio::sync::mpsc::Sender<websocket_manager::Command>,
 ) -> ControlFlow<(), ()> {
     match msg {
@@ -373,7 +398,7 @@ async fn process_message(
             } else {
                 println!(">>> {who} somehow sent close message without CloseFrame");
             }
-            let cmd = websocket_manager::Command::DeleteWS { id };
+            let cmd = websocket_manager::Command::DeleteWS { key };
             let _ = recv.send(cmd).await;
             return ControlFlow::Break(());
         }
