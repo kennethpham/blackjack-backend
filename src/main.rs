@@ -250,6 +250,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .route("/user/create", post(add_user))
         .route("/user/:name", get(get_user))
         .route("/ws/:id", get(ws_handler))
+        .route("/ws/game/:id", get(game_ws_handler))
         .with_state(shared_db_state)
         .layer(cors)
         .layer(
@@ -374,6 +375,47 @@ async fn handle_socket(
     });
 
     println!("Websocket context {who} completed handle_socket");
+}
+
+async fn game_ws_handler(
+    State(app_state): State<Arc<AppState>>,
+    ws: WebSocketUpgrade,
+    user_agent: Option<TypedHeader<headers::UserAgent>>,
+    Path(id): Path<String>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+) -> Result<Response, (StatusCode, String)> {
+    let user_agent = match user_agent {
+        Some(user_data) => user_data.to_string(),
+        None => String::from("Unknown browser"),
+    };
+    println!("{} at {}", user_agent, addr);
+
+    let arc = &app_state.clone();
+
+    let conn = arc
+        .as_ref()
+        .db
+        .db_pool
+        .get()
+        .await
+        .map_err(internal_error)?;
+
+    let uuid = Uuid::parse_str(id.as_str()).map_err(internal_error)?;
+
+    // Verify that id passed is valid
+    let row = conn
+        .query_one(
+            "SELECT username, id FROM users WHERE id = $1 ",
+            &[&uuid.clone()],
+        )
+        .await
+        .map_err(internal_error)?;
+
+    Ok(ws
+        .on_failed_upgrade(|error| {
+            println!("Error: {}", error);
+        })
+        .on_upgrade(move |socket| handle_socket(app_state, socket, addr, (row.get(0), row.get(1)))))
 }
 
 async fn process_message(

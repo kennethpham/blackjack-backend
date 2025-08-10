@@ -1,9 +1,7 @@
+use crate::card::{Card, CardSuit, CardValue};
+use rand::{seq::SliceRandom, thread_rng};
 use strum::IntoEnumIterator;
 use uuid::Uuid;
-
-use crate::card::{Card, CardSuit, CardValue};
-
-use rand::{seq::SliceRandom, thread_rng};
 
 // Number of decks used by table.
 const NUM_OF_DECKS: u8 = 3;
